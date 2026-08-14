@@ -1,6 +1,5 @@
 # Bloqueador de anuncios casero con Raspberry Pi + Pi-hole + Tailscale
 
-> Bitácora de laboratorio de un estudiante de Ingeniería en Computación e Informática.
 > Objetivo: dejar de ver anuncios en todos mis dispositivos, estén en la casa (WiFi) o afuera (datos móviles), usando una Raspberry Pi como servidor DNS con Pi-hole y Tailscale como VPN para "llevarme" ese DNS a todos lados.
 
 ## 1. ¿Por qué esto y no una app de bloqueo cualquiera?
@@ -69,7 +68,7 @@ Después de agregar listas hay que actualizar "gravity" (la base de datos compil
 pihole -g
 ```
 
-Terminé con **más de 7 millones de dominios** bloqueados. Sí, en serio.
+Terminé con **más de 7 millones de dominios** bloqueados. Sí.
 
 ### 4.3 Instalar Tailscale en la Raspberry
 
