@@ -101,7 +101,26 @@ En la consola de administración (**https://login.tailscale.com/admin/dns**):
 2. Activar la opción **"Override DNS servers"** (o "Override local DNS" según la versión de la consola). Sin esto, cada dispositivo sigue usando el DNS de su propia red cuando no hay conflicto, y en datos móviles eso significa el DNS de la operadora.
 3. (Opcional) Activar **MagicDNS** si se quiere acceder a los dispositivos por nombre (`raspberry.tailXXXX.ts.net`) en vez de por IP.
 
-## 5. Verificación
+## 5. Capturas y datos reales
+
+Panel de acceso de Pi-hole (`/admin/login`), capturado directamente desde la Raspberry de este proyecto:
+
+![Login de Pi-hole](screenshots/pihole-login.png)
+
+Estadísticas reales obtenidas desde la API de Pi-hole (`GET /api/stats/summary`) en el momento de escribir esta documentación:
+
+| Métrica | Valor |
+|---|---|
+| Dominios en la blocklist (gravity) | 3.901.584 |
+| Consultas totales (24h) | 8.379 |
+| Consultas bloqueadas | 1.256 (≈ 15%) |
+| Bloqueadas por regex (safeframe/adtrafficquality) | 23 |
+| Bloqueadas por gravity (listas) | 1.233 |
+| Clientes activos en la red | 13 |
+
+El 15% de bloqueo parece poco, pero hay que recordar que la mayoría de las consultas DNS totales son de apps normales (WhatsApp, APIs de bancos, CDNs, etc.), no solo anuncios. Lo importante es que ese ~15% son justamente los dominios de tracking/publicidad que antes cargaban sin filtro.
+
+## 6. Verificación
 
 Con WiFi conectado en casa:
 
@@ -120,7 +139,7 @@ sudo tail -f /var/log/pihole/pihole.log
 
 y buscar líneas con la IP de Tailscale del celular (ej. `100.72.18.99`) mientras se navega con datos móviles.
 
-## 6. Errores que me encontré (y cómo los resolví)
+## 7. Errores que me encontré (y cómo los resolví)
 
 ### Error 1: "Funciona en WiFi pero no en datos móviles"
 - **Causa:** el Pi-hole nunca se configuró como *Global nameserver* en la consola de Tailscale, o la opción "Override DNS" estaba apagada. El celular, al estar en su red WiFi de casa, usaba el Pi-hole porque el router lo entregaba por DHCP; en datos móviles no había ese DHCP, así que usaba el DNS de la operadora.
@@ -170,15 +189,19 @@ y buscar líneas con la IP de Tailscale del celular (ej. `100.72.18.99`) mientra
 - **Causa:** tenía dos cuentas de Tailscale distintas usadas en distintos dispositivos (una asociada a un correo, otra asociada a una cuenta de GitHub), así que desde un dispositivo no se veían los del otro tailnet. Perdí tiempo pensando que el Pi-hole "no estaba en la VPN" cuando en realidad sí lo estaba, pero en otra red privada.
 - **Solución:** confirmar con `tailscale status` en **cada** dispositivo involucrado (no asumir que todos ven la misma lista) y usar la misma cuenta/tailnet en todos los dispositivos que deban compartir el Pi-hole.
 
-## 7. Conclusiones
+## 8. Conclusiones
 
 - Un Pi-hole solo sirve dentro de la red donde vive, a menos que se combine con una VPN tipo Tailscale que "estire" esa red a cualquier lugar.
 - El bloqueo por DNS tiene un límite natural: dominios generados dinámicamente (hashes aleatorios) no se pueden bloquear con listas de dominios exactos, hay que usar expresiones regulares.
 - La mayoría de los "no funciona" no fueron culpa de Pi-hole ni de Tailscale por separado, sino de la configuración que los conecta (el nameserver global + override DNS de Tailscale).
 - Revisar logs en tiempo real (`tail -f /var/log/pihole/pihole.log`) fue la herramienta más útil para depurar, mucho más que adivinar.
 
-## 8. Recursos usados
+## 9. Recursos usados
 
 - [Documentación oficial de Pi-hole](https://docs.pi-hole.net/)
 - [Guía de Tailscale + Pi-hole](https://tailscale.com/kb/1114/pi-hole)
 - [Pi-hole Optimized Blocklists (zachlagden)](https://github.com/zachlagden/Pi-hole-Optimized-Blocklists)
+
+## 10. Licencia
+
+Este proyecto (la documentación, no Pi-hole ni Tailscale) se distribuye bajo licencia [MIT](LICENSE).
