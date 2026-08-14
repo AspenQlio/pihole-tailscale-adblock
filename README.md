@@ -1,0 +1,185 @@
+# Bloqueador de anuncios casero con Raspberry Pi + Pi-hole + Tailscale
+
+> Bitácora de laboratorio de un estudiante de Ingeniería en Computación e Informática.
+> Objetivo: dejar de ver anuncios en todos mis dispositivos, estén en la casa (WiFi) o afuera (datos móviles), usando una Raspberry Pi como servidor DNS con Pi-hole y Tailscale como VPN para "llevarme" ese DNS a todos lados.
+
+## 1. ¿Por qué esto y no una app de bloqueo cualquiera?
+
+Las apps de bloqueo de anuncios en el celular normalmente:
+- Solo funcionan dentro del navegador (no bloquean anuncios de apps nativas).
+- Consumen batería.
+- Algunas venden tus datos de navegación (irónico, lo sé).
+
+Un **DNS sinkhole** (Pi-hole) resuelve esto a nivel de red: cuando una app pide la IP de `doubleclick.net`, el Pi-hole responde `0.0.0.0` en vez de la IP real, y la app/anuncio nunca carga. El problema es que esto solo funciona si el dispositivo *usa* el DNS del Pi-hole. En la casa es fácil (se configura en el router). Afuera, con datos móviles, el celular usa el DNS de la operadora... a menos que exista un túnel VPN que lo lleve de vuelta al Pi-hole. Ahí entra **Tailscale**.
+
+## 2. Arquitectura
+
+```
+[Celular Android] --(datos móviles o WiFi)--> Internet
+        |
+        | túnel Tailscale (WireGuard, cifrado)
+        v
+[Raspberry Pi en la casa] --- corre Pi-hole (puerto 53) + tailscaled
+        |
+        v
+   DNS "de verdad" (1.1.1.1, 8.8.8.8, etc.) solo si el dominio NO está bloqueado
+```
+
+Ambos dispositivos (Raspberry y celular) están dentro del mismo *tailnet* (red privada de Tailscale). El celular manda sus consultas DNS a la IP de Tailscale de la Raspberry (`100.x.x.x`), no a su IP de LAN (`192.168.x.x`), así que funciona sin importar en qué red física esté.
+
+## 3. Requisitos
+
+- Raspberry Pi (usé una con Debian 13 "trixie") con SSH habilitado.
+- Cuenta de Tailscale (gratis, hasta 100 dispositivos en el plan personal).
+- Celular Android.
+- Paciencia, porque nada quedó bien a la primera.
+
+## 4. Instalación paso a paso
+
+### 4.1 Instalar Pi-hole en la Raspberry
+
+```bash
+curl -sSL https://install.pi-hole.net | bash
+```
+
+El instalador es interactivo y preguntó:
+- Interfaz de red a usar (`eth0` en mi caso).
+- Upstream DNS providers (elegí Cloudflare + Google como respaldo: `1.1.1.1`, `1.0.0.1`, `8.8.8.8`, `8.8.4.4`).
+- Listas de bloqueo por defecto.
+- Protocolos IPv4/IPv6.
+
+Al final entrega un **panel web** en `http://<ip-local>/admin` y una contraseña temporal para entrar.
+
+### 4.2 Agregar listas de bloqueo más agresivas
+
+Las listas por defecto de Pi-hole bloquean bastante, pero se quedan cortas con trackers modernos. Agregué estas (Configuración → Listas de bloqueo, en el panel web):
+
+```
+https://media.githubusercontent.com/media/zachlagden/Pi-hole-Optimized-Blocklists/main/lists/advertising.txt
+https://media.githubusercontent.com/media/zachlagden/Pi-hole-Optimized-Blocklists/main/lists/tracking.txt
+https://media.githubusercontent.com/media/zachlagden/Pi-hole-Optimized-Blocklists/main/lists/malicious.txt
+https://media.githubusercontent.com/media/zachlagden/Pi-hole-Optimized-Blocklists/main/lists/suspicious.txt
+https://media.githubusercontent.com/media/zachlagden/Pi-hole-Optimized-Blocklists/main/lists/comprehensive.txt
+https://media.githubusercontent.com/media/zachlagden/Pi-hole-Optimized-Blocklists/main/lists/all_domains.txt
+```
+
+Después de agregar listas hay que actualizar "gravity" (la base de datos compilada que usa Pi-hole para bloquear):
+
+```bash
+pihole -g
+```
+
+Terminé con **más de 7 millones de dominios** bloqueados. Sí, en serio.
+
+### 4.3 Instalar Tailscale en la Raspberry
+
+```bash
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
+```
+
+`tailscale up` imprime una URL. Hay que abrirla en un navegador (en cualquier dispositivo) y loguearse con la cuenta de Tailscale (yo usé login con GitHub). Una vez aprobado, la Raspberry aparece en el tailnet con una IP tipo `100.x.x.x`.
+
+Verificar que quedó andando:
+
+```bash
+tailscale status
+```
+
+### 4.4 Instalar Tailscale en el celular
+
+1. Descargar la app **Tailscale** desde Play Store.
+2. Iniciar sesión con la misma cuenta/tailnet que la Raspberry.
+3. Activar el switch de conexión (queda corriendo como una VPN normal de Android).
+
+### 4.5 Decirle a Tailscale que use el Pi-hole como DNS de todo el tailnet
+
+Esta parte es la que más cuesta entender al principio: instalar Tailscale en ambos dispositivos **no basta**. Por defecto Tailscale solo interconecta los dispositivos, pero no toca la configuración de DNS de nadie.
+
+En la consola de administración (**https://login.tailscale.com/admin/dns**):
+
+1. En **"Nameservers"** agregar la IP de Tailscale de la Raspberry (la `100.x.x.x`, **no** la `192.168.x.x` de la LAN) como *Global nameserver*.
+2. Activar la opción **"Override DNS servers"** (o "Override local DNS" según la versión de la consola). Sin esto, cada dispositivo sigue usando el DNS de su propia red cuando no hay conflicto, y en datos móviles eso significa el DNS de la operadora.
+3. (Opcional) Activar **MagicDNS** si se quiere acceder a los dispositivos por nombre (`raspberry.tailXXXX.ts.net`) en vez de por IP.
+
+## 5. Verificación
+
+Con WiFi conectado en casa:
+
+```bash
+nslookup doubleclick.net
+# Debería responder 0.0.0.0
+```
+
+Apagando el WiFi del celular y probando solo con datos móviles, abrir una página con anuncios y ver si cargan. Si el Pi-hole está bien configurado, no deberían aparecer (o aparecer muchos menos).
+
+Para confirmar que las consultas realmente están llegando al Pi-hole por Tailscale, se puede revisar el log en vivo desde la Raspberry:
+
+```bash
+sudo tail -f /var/log/pihole/pihole.log
+```
+
+y buscar líneas con la IP de Tailscale del celular (ej. `100.72.18.99`) mientras se navega con datos móviles.
+
+## 6. Errores que me encontré (y cómo los resolví)
+
+### Error 1: "Funciona en WiFi pero no en datos móviles"
+- **Causa:** el Pi-hole nunca se configuró como *Global nameserver* en la consola de Tailscale, o la opción "Override DNS" estaba apagada. El celular, al estar en su red WiFi de casa, usaba el Pi-hole porque el router lo entregaba por DHCP; en datos móviles no había ese DHCP, así que usaba el DNS de la operadora.
+- **Solución:** configurar el nameserver global + override en `login.tailscale.com/admin/dns` (paso 4.5). Con esto el celular usa el DNS del tailnet sin importar la red física en la que esté.
+
+### Error 2: Pi-hole no responde a consultas que llegan por la interfaz de Tailscale
+- **Causa:** Pi-hole tiene una opción `listeningMode` en `/etc/pihole/pihole.toml` (versión 6). Si queda en `LOCAL`, solo responde a IPs de la subred que reconoce como "local", y puede ignorar silenciosamente las consultas que llegan desde la interfaz `tailscale0` (rango `100.64.0.0/10`).
+- **Solución:** cambiar a modo `ALL`:
+  ```bash
+  sudo pihole-FTL --config dns.listeningMode ALL
+  # o editando directamente /etc/pihole/pihole.toml
+  ```
+  y reiniciar el servicio:
+  ```bash
+  sudo systemctl restart pihole-FTL
+  ```
+
+### Error 3: El celular no aparecía "online" en `tailscale status`
+- **Causa:** la app de Tailscale en Android puede quedar "dormida" por el ahorro de batería del sistema, cortando el túnel VPN sin avisar.
+- **Solución:** en Ajustes de Android → Batería → Tailscale → permitir que corra sin restricciones ("sin optimización de batería"). También ayuda activar "Ejecutar en segundo plano" dentro de la propia app.
+
+### Error 4: Algunos anuncios seguían apareciendo aunque el DNS y Tailscale estaban bien
+- **Causa:** esta fue la más interesante. Comprobé con `dig` que dominios de anuncios "clásicos" (`doubleclick.net`, `googlesyndication.com`, `googletagservices.com`) sí quedaban bloqueados (`0.0.0.0`). Pero Google sirve algunos anuncios desde subdominios **generados al azar**, tipo:
+  ```
+  daee5707fcfa35345e4d941fbfb1c828.safeframe.googlesyndication.com
+  ```
+  Como el hash cambia constantemente, **ninguna lista de bloqueo estática puede tener ese dominio exacto**, así que siempre se "escapaba" y se resolvía normal.
+- **Solución:** usar una regla de **expresión regular** en Pi-hole en vez de una lista de dominios exactos, para cubrir *cualquier* subdominio:
+  ```bash
+  pihole --regex "(\.|^)safeframe\.googlesyndication\.com$" "(\.|^)adtrafficquality\.google$"
+  ```
+  Verificación:
+  ```bash
+  dig @127.0.0.1 daee5707fcfa35345e4d941fbfb1c828.safeframe.googlesyndication.com +short
+  # 0.0.0.0
+  ```
+
+### Error 5: `pihole -q dominio` decía "0 domains" aunque el dominio sí estaba bloqueado
+- **Causa:** confusión mía. El comando `pihole -q` en Pi-hole v6 busca coincidencias exactas en la tabla de listas manuales (denylist/allowlist), no en toda la base "gravity" compilada (que tenía más de 7 millones de entradas). Que dijera "0 domains" no significaba que no estuviera bloqueado.
+- **Solución:** para comprobar bloqueo real, siempre usar una consulta DNS directa en vez de `pihole -q`:
+  ```bash
+  dig @<ip-del-pihole> dominio.com +short
+  ```
+  Si devuelve `0.0.0.0` o `::`, está bloqueado. Si devuelve una IP real, no lo está.
+
+### Error 6: El Pi-hole del proyecto y mi PC estaban en *tailnets* distintos
+- **Causa:** tenía dos cuentas de Tailscale distintas usadas en distintos dispositivos (una asociada a un correo, otra asociada a una cuenta de GitHub), así que desde un dispositivo no se veían los del otro tailnet. Perdí tiempo pensando que el Pi-hole "no estaba en la VPN" cuando en realidad sí lo estaba, pero en otra red privada.
+- **Solución:** confirmar con `tailscale status` en **cada** dispositivo involucrado (no asumir que todos ven la misma lista) y usar la misma cuenta/tailnet en todos los dispositivos que deban compartir el Pi-hole.
+
+## 7. Conclusiones
+
+- Un Pi-hole solo sirve dentro de la red donde vive, a menos que se combine con una VPN tipo Tailscale que "estire" esa red a cualquier lugar.
+- El bloqueo por DNS tiene un límite natural: dominios generados dinámicamente (hashes aleatorios) no se pueden bloquear con listas de dominios exactos, hay que usar expresiones regulares.
+- La mayoría de los "no funciona" no fueron culpa de Pi-hole ni de Tailscale por separado, sino de la configuración que los conecta (el nameserver global + override DNS de Tailscale).
+- Revisar logs en tiempo real (`tail -f /var/log/pihole/pihole.log`) fue la herramienta más útil para depurar, mucho más que adivinar.
+
+## 8. Recursos usados
+
+- [Documentación oficial de Pi-hole](https://docs.pi-hole.net/)
+- [Guía de Tailscale + Pi-hole](https://tailscale.com/kb/1114/pi-hole)
+- [Pi-hole Optimized Blocklists (zachlagden)](https://github.com/zachlagden/Pi-hole-Optimized-Blocklists)
