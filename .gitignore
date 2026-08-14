@@ -1,0 +1,15 @@
+# Secretos / credenciales
+*.env
+*.pem
+*.key
+secrets.*
+*password*
+*credentials*
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Editores
+.vscode/
+.idea/
