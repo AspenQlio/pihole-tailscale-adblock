@@ -359,7 +359,43 @@ tailscale status
 
 En Android es todavía más simple: la app tiene una opción "Iniciar al arrancar" en su configuración que hace lo mismo.
 
-## 9. Conclusiones
+## 9. Administrar la Raspberry desde fuera de casa
+
+Una ventaja "gratis" de tener todo en el mismo tailnet: **no hace falta configurar nada extra** para administrar la Raspberry estando fuera de casa. No hay que abrir puertos en el router, ni usar DDNS, ni exponer SSH a internet — mientras el dispositivo desde el que te conectas tenga Tailscale activo (que en mi caso queda siempre activo por el exit node), puede hablar directo con la Raspberry por su IP privada de Tailscale, sin importar en qué red física esté ninguno de los dos.
+
+### 9.1 Activar Tailscale SSH (recomendado sobre SSH normal)
+
+Tailscale SSH usa la identidad del tailnet para autenticar en vez de contraseñas de Linux, y además deja un registro auditable de quién se conectó:
+
+```bash
+sudo tailscale set --ssh
+```
+
+### 9.2 Conectarse desde cualquier lugar
+
+```bash
+tailscale ssh aspen@raspberry.tail93c359.ts.net
+```
+
+No pide contraseña: la sesión de Tailscale del dispositivo desde el que te conectas ya es la autenticación. Si el nombre corto (`raspberry`) no resuelve en algún dispositivo, usar el nombre completo con MagicDNS (`raspberry.tail93c359.ts.net`) o directamente la IP (`100.84.189.38`) siempre funciona.
+
+### 9.3 Panel web de Pi-hole desde fuera
+
+Mismo principio, cualquier servicio web que corra en la Raspberry es alcanzable igual:
+
+```
+http://raspberry.tail93c359.ts.net/admin
+```
+
+### 9.4 Resumen
+
+| Qué hacer | Cómo |
+|---|---|
+| Terminal / instalar paquetes / editar configs | `tailscale ssh aspen@raspberry.tail93c359.ts.net` |
+| Panel de Pi-hole | `http://raspberry.tail93c359.ts.net/admin` |
+| Ver si la Raspberry está online | `tailscale status` desde cualquier dispositivo del tailnet |
+
+## 10. Conclusiones
 
 - Un Pi-hole solo sirve dentro de la red donde vive, a menos que se combine con una VPN tipo Tailscale que "estire" esa red a cualquier lugar.
 - El bloqueo por DNS tiene un límite natural: dominios generados dinámicamente (hashes aleatorios) no se pueden bloquear con listas de dominios exactos, hay que usar expresiones regulares.
@@ -368,12 +404,12 @@ En Android es todavía más simple: la app tiene una opción "Iniciar al arranca
 - Un exit node de Tailscale convierte la Raspberry en una VPN completa "gratis" (sin pagar un servicio de VPN comercial), pero hay que revisar el soporte de NAT del kernel para IPv6 antes de asumir que "activar el flag ya funciona".
 - Antes de asumir que un cambio nuevo (como activar el exit node) rompió algo, vale la pena verificar si el problema ya existía de antes con una herramienta simple como `ip route get <ip>`.
 
-## 10. Recursos usados
+## 11. Recursos usados
 
 - [Documentación oficial de Pi-hole](https://docs.pi-hole.net/)
 - [Guía de Tailscale + Pi-hole](https://tailscale.com/kb/1114/pi-hole)
 - [Pi-hole Optimized Blocklists (zachlagden)](https://github.com/zachlagden/Pi-hole-Optimized-Blocklists)
 
-## 11. Licencia
+## 12. Licencia
 
 Este proyecto (la documentación, no Pi-hole ni Tailscale) se distribuye bajo licencia [MIT](LICENSE).
