@@ -234,19 +234,108 @@ y buscar líneas con la IP de Tailscale del celular (ej. `100.72.18.99`) mientra
      sleep 3 && cat /tmp/ts-up.log
      ```
 
-## 8. Conclusiones
+### Error 8: El kernel de Raspberry Pi OS no soporta NAT para IPv6
+- **Causa:** al activar `--advertise-exit-node`, Tailscale ofrece automáticamente ruteo de **IPv4 y IPv6** (`0.0.0.0/0` y `::/0`). El laptop tenía como ruta principal justo IPv6 (así entrega direcciones el ISP), así que en cuanto activó el exit node, todo su tráfico se fue por la ruta IPv6 hacia la Raspberry... y ahí murió, porque el kernel de Raspberry Pi OS (`6.18.34+rpt-rpi-v8`) **no tiene compilado el soporte de NAT/masquerade para IPv6** (`CONFIG_IP6_NF_NAT` no existe ni como módulo). Se puede confirmar así:
+  ```bash
+  grep -i "IP6_NF_NAT\|IP6_NF_TARGET_MASQUERADE" /boot/config-$(uname -r)
+  # (sin resultados = no está compilado, no es algo que se arregle con modprobe)
+
+  sudo nft list ruleset | grep -A4 "table ip6 nat"
+  # chain ts-postrouting {
+  #   ... # Warning: XT target MASQUERADE not found
+  #   xt target "MASQUERADE"
+  # }
+  ```
+  El resultado: los paquetes IPv6 se marcaban para NAT pero la regla fallaba silenciosamente, así que esos paquetes nunca volvían — el laptop se quedaba sin internet porque justo su ruta principal era la que estaba rota.
+- **Solución:** en vez de anunciar el exit node completo (v4+v6), anunciar solo la ruta IPv4:
+  ```bash
+  sudo tailscale set --advertise-exit-node=false --advertise-routes=0.0.0.0/0
+  ```
+  Esto hace que la Raspberry siga ofreciéndose como exit node (aparece igual en `tailscale exit-node list`), pero **solo para IPv4**, que sí tiene NAT funcionando. El costo: el tráfico IPv6 del dispositivo cliente no pasa por el túnel (queda usando su red local directamente). Para este proyecto es un compromiso aceptable; si se necesita protección también en IPv6, la alternativa real es compilar un kernel custom con `CONFIG_IP6_NF_NAT`, algo fuera del alcance de un Raspberry Pi OS estándar.
+
+### Error 9: La Raspberry en realidad ya tenía la puerta de enlace mal configurada (sin relación con Tailscale)
+- **Causa:** después de "arreglar" el error anterior, seguía sin haber internet — pero esta vez ni siquiera la propia Raspberry podía salir a internet, no solo el laptop. Diagnostiqué con:
+  ```bash
+  ip route get 8.8.8.8
+  # 8.8.8.8 via 255.255.255.0 dev eth0   <- la "puerta de enlace" es una máscara de subred, no una IP válida
+  ```
+  Resulta que la conexión de red de la Raspberry (`nmcli connection show "Wired connection 1"`) tenía configurada manualmente `ipv4.gateway: 255.255.255.0` en vez de `192.168.100.1` (el router real). Esto probablemente llevaba así desde que alguien configuró la IP fija de la Raspberry y se equivocó de campo (puso la máscara de subred donde iba el gateway). No se notaba en el día a día porque las consultas DNS del Pi-hole hacia redes locales igual funcionaban, y aparentemente **otra ruta (quizás una previa por DHCP)** venía tapando el problema hasta que el reinicio de `tailscaled` reforzó la config manual y expuso el error real.
+- **Solución:**
+  ```bash
+  sudo nmcli connection modify "Wired connection 1" ipv4.gateway 192.168.100.1
+  sudo nmcli connection up "Wired connection 1"
+  ```
+- **Aprendizaje:** cuando algo "de repente" deja de funcionar en la red después de un cambio, no asumir que el cambio reciente es la única causa — a veces solo destapa un problema que ya estaba ahí. `ip route get <ip>` fue la herramienta clave para detectarlo rápido.
+
+## 8. Bonus: usar la Raspberry como VPN completa (exit node) para WiFi públicos
+
+Bloquear anuncios con DNS está bien, pero no protege el tráfico en sí: en un WiFi público (aeropuerto, café, universidad) cualquiera en la misma red puede intentar espiar el tráfico no cifrado. La solución es convertir la Raspberry en un **exit node** de Tailscale: todo el tráfico de mis otros dispositivos sale primero cifrado (WireGuard) hacia la Raspberry, y desde ahí a internet. El WiFi público solo ve un túnel cifrado, no el contenido real.
+
+### 8.1 Habilitar reenvío de paquetes (IP forwarding) en la Raspberry
+
+```bash
+echo 'net.ipv4.ip_forward = 1' | sudo tee -a /etc/sysctl.d/99-tailscale.conf
+echo 'net.ipv6.conf.all.forwarding = 1' | sudo tee -a /etc/sysctl.d/99-tailscale.conf
+sudo sysctl -p /etc/sysctl.d/99-tailscale.conf
+```
+
+### 8.2 Anunciar la Raspberry como exit node
+
+```bash
+sudo tailscale set --advertise-exit-node
+```
+
+### 8.3 Aprobar el exit node en la consola de administración
+
+Por defecto Tailscale **no deja usar un exit node hasta que un admin lo aprueba** (medida de seguridad, para que un dispositivo cualquiera no pueda ofrecerse como salida de tráfico sin autorización). Hay que ir a:
+
+**https://login.tailscale.com/admin/machines** → buscar la Raspberry → menú `⋯` → *Edit route settings* → activar *Use as exit node*.
+
+Se puede confirmar desde cualquier otro dispositivo del tailnet con:
+
+```bash
+tailscale exit-node list
+```
+
+### 8.4 Usar el exit node desde los otros dispositivos
+
+- **Linux (laptop):**
+  ```bash
+  sudo tailscale set --exit-node=raspberry
+  ```
+- **Android:** abrir la app Tailscale → tocar "Exit node" (o el ícono de escudo) → elegir `raspberry`.
+
+### 8.5 Verificar que realmente está funcionando
+
+La prueba real es comparar la IP pública del exit node contra la IP pública que ve cada dispositivo:
+
+```bash
+# En la Raspberry
+curl -4 ifconfig.me
+
+# En el dispositivo que usa el exit node (debería salir la MISMA IP)
+curl -4 ifconfig.me
+```
+
+En el celular, lo más simple es abrir `whatismyip.com` en el navegador y comparar contra la IP de la Raspberry.
+
+> **Nota:** `tailscale status` puede mostrar un warning `Subnet routing is enabled, but IP forwarding is disabled`. Si ya se siguió el paso 8.1 y el exit node funciona (las IPs públicas coinciden), es un falso positivo relacionado con el error de IPv6 explicado en la sección de errores (Error 8) — se puede ignorar con tranquilidad.
+
+## 9. Conclusiones
 
 - Un Pi-hole solo sirve dentro de la red donde vive, a menos que se combine con una VPN tipo Tailscale que "estire" esa red a cualquier lugar.
 - El bloqueo por DNS tiene un límite natural: dominios generados dinámicamente (hashes aleatorios) no se pueden bloquear con listas de dominios exactos, hay que usar expresiones regulares.
 - La mayoría de los "no funciona" no fueron culpa de Pi-hole ni de Tailscale por separado, sino de la configuración que los conecta (el nameserver global + override DNS de Tailscale).
 - Revisar logs en tiempo real (`tail -f /var/log/pihole/pihole.log`) fue la herramienta más útil para depurar, mucho más que adivinar.
+- Un exit node de Tailscale convierte la Raspberry en una VPN completa "gratis" (sin pagar un servicio de VPN comercial), pero hay que revisar el soporte de NAT del kernel para IPv6 antes de asumir que "activar el flag ya funciona".
+- Antes de asumir que un cambio nuevo (como activar el exit node) rompió algo, vale la pena verificar si el problema ya existía de antes con una herramienta simple como `ip route get <ip>`.
 
-## 9. Recursos usados
+## 10. Recursos usados
 
 - [Documentación oficial de Pi-hole](https://docs.pi-hole.net/)
 - [Guía de Tailscale + Pi-hole](https://tailscale.com/kb/1114/pi-hole)
 - [Pi-hole Optimized Blocklists (zachlagden)](https://github.com/zachlagden/Pi-hole-Optimized-Blocklists)
 
-## 10. Licencia
+## 11. Licencia
 
 Este proyecto (la documentación, no Pi-hole ni Tailscale) se distribuye bajo licencia [MIT](LICENSE).
