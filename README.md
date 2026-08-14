@@ -101,6 +101,34 @@ En la consola de administración (**https://login.tailscale.com/admin/dns**):
 2. Activar la opción **"Override DNS servers"** (o "Override local DNS" según la versión de la consola). Sin esto, cada dispositivo sigue usando el DNS de su propia red cuando no hay conflicto, y en datos móviles eso significa el DNS de la operadora.
 3. (Opcional) Activar **MagicDNS** si se quiere acceder a los dispositivos por nombre (`raspberry.tailXXXX.ts.net`) en vez de por IP.
 
+### 4.6 Sumar un tercer dispositivo: laptop con Arch Linux
+
+Una vez que el celular ya funcionaba, agregué mi notebook (HP EliteBook, Arch Linux) al mismo tailnet para que también use el Pi-hole, incluso conectado a otras redes WiFi (ej. universidad, café).
+
+Instalar Tailscale en Arch (está en el repo `extra` de pacman, no hace falta un script externo como en Debian):
+
+```bash
+sudo pacman -S tailscale
+sudo systemctl enable --now tailscaled
+sudo tailscale up --hostname=elitebook-arch
+```
+
+El flag `--hostname` es opcional, pero ayuda para que el dispositivo no aparezca en el tailnet con un nombre genérico tipo `archlinux` (que además puede chocar con otros equipos que se llamen igual).
+
+Igual que con la Raspberry, `tailscale up` entrega una URL para aprobar el dispositivo desde el navegador con la cuenta del tailnet.
+
+Verificar que Tailscale realmente está siendo usado como DNS del sistema:
+
+```bash
+cat /etc/resolv.conf
+# nameserver 100.100.100.100   <- proxy DNS local de Tailscale, reenvía al nameserver global (el Pi-hole)
+
+resolvectl query doubleclick.net
+# doubleclick.net: 0.0.0.0   -- link: tailscale0   <- bloqueado correctamente
+```
+
+Si `resolvectl status` muestra que el DNS del enlace WiFi sigue siendo el del router (ej. `192.168.100.75` en modo LAN, sin pasar por `tailscale0`) y no aparece Tailscale como "Global" DNS, revisar el paso 4.5 (nameserver global + override en la consola de Tailscale) — es el mismo error que ya se explica más abajo.
+
 ## 5. Capturas y datos reales
 
 Panel de acceso de Pi-hole (`/admin/login`), capturado directamente desde la Raspberry de este proyecto:
@@ -188,6 +216,23 @@ y buscar líneas con la IP de Tailscale del celular (ej. `100.72.18.99`) mientra
 ### Error 6: El Pi-hole del proyecto y mi PC estaban en *tailnets* distintos
 - **Causa:** tenía dos cuentas de Tailscale distintas usadas en distintos dispositivos (una asociada a un correo, otra asociada a una cuenta de GitHub), así que desde un dispositivo no se veían los del otro tailnet. Perdí tiempo pensando que el Pi-hole "no estaba en la VPN" cuando en realidad sí lo estaba, pero en otra red privada.
 - **Solución:** confirmar con `tailscale status` en **cada** dispositivo involucrado (no asumir que todos ven la misma lista) y usar la misma cuenta/tailnet en todos los dispositivos que deban compartir el Pi-hole.
+
+### Error 7: `tailscale up` se quedó "pegado" y el link de autenticación dejó de servir
+- **Causa:** al configurar el laptop con Arch, ejecuté `tailscale up` y como no terminaba rápido (queda esperando que se apruebe el login en el navegador) até a pensar que se había colgado y lo corrí de nuevo un par de veces. Cada ejecución nueva de `tailscale up` genera **una URL de autenticación distinta**, y deja el proceso anterior corriendo en segundo plano compitiendo por el mismo login. Terminé con 3 procesos `tailscale up` vivos al mismo tiempo y ninguno de los links viejos servía porque el estado había cambiado.
+- **Solución:**
+  1. Matar todos los procesos viejos antes de reintentar:
+     ```bash
+     sudo pkill -9 -f "tailscale up"
+     ```
+  2. Ejecutar `tailscale up` **una sola vez** y usar únicamente el último link que imprime:
+     ```bash
+     sudo tailscale up --hostname=elitebook-arch
+     ```
+  3. Si se necesita correrlo sin bloquear la terminal (por ejemplo por SSH), mandarlo a segundo plano con `setsid`/`nohup` y leer el link desde el archivo de log en vez de relanzar el comando:
+     ```bash
+     sudo bash -c 'setsid nohup tailscale up --hostname=elitebook-arch > /tmp/ts-up.log 2>&1 < /dev/null &'
+     sleep 3 && cat /tmp/ts-up.log
+     ```
 
 ## 8. Conclusiones
 
