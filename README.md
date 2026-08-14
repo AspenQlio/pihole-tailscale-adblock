@@ -321,6 +321,44 @@ En el celular, lo más simple es abrir `whatismyip.com` en el navegador y compar
 
 > **Nota:** `tailscale status` puede mostrar un warning `Subnet routing is enabled, but IP forwarding is disabled`. Si ya se siguió el paso 8.1 y el exit node funciona (las IPs públicas coinciden), es un falso positivo relacionado con el error de IPv6 explicado en la sección de errores (Error 8) — se puede ignorar con tranquilidad.
 
+### 8.6 ¿Es seguro dejarlo siempre encendido?
+
+Sí, no hay ningún riesgo de seguridad en dejarlo activo todo el tiempo, pero hay trade-offs a tener en cuenta:
+
+| Trade-off | Detalle |
+|---|---|
+| Velocidad | Todo el tráfico usa la subida/bajada de la conexión de la casa. En una conexión residencial con poca subida, se nota más lento (videollamadas, subir archivos). |
+| Latencia | Un salto extra (a la casa y de vuelta). Notorio en juegos online, imperceptible navegando. |
+| Disponibilidad | Si se corta la luz/internet en la casa, el dispositivo pierde internet hasta que se desactive el exit node manualmente (Tailscale no hace fallback automático). |
+| Cobertura | Solo protege IPv4 (por el error 8 del kernel de Raspberry Pi OS). El tráfico IPv6 sigue la ruta local normal. |
+| Geolocalización | Los sitios web van a ver la IP/ubicación de la casa sin importar dónde se esté físicamente. |
+
+Para la mayoría de los usos (proteger tráfico en WiFi público) esto es exactamente lo que se busca, así que dejarlo siempre activo es una decisión razonable.
+
+### 8.7 Que arranque solo al prender el equipo
+
+No hace falta nada especial de "autostart" tipo aplicación gráfica: basta con que el **servicio del sistema** (`tailscaled`) esté habilitado, porque tanto el login como la selección del exit node quedan guardados en su estado interno.
+
+```bash
+sudo systemctl enable --now tailscaled
+```
+
+Con esto, cada vez que se prende el equipo:
+1. `tailscaled` arranca automáticamente (sin abrir ninguna app ni tocar nada).
+2. Se reconecta solo al tailnet con la sesión ya guardada (no vuelve a pedir login).
+3. Retoma el exit node que se había configurado antes (`tailscale set --exit-node=...`).
+
+Se puede comprobar que el estado persiste reiniciando el servicio (simula lo que pasa en un reinicio real del equipo) y revisando que siga apareciendo `active; exit node`:
+
+```bash
+sudo systemctl restart tailscaled
+sleep 5
+tailscale status
+# 100.84.189.38   raspberry   ...   active; exit node; ...
+```
+
+En Android es todavía más simple: la app tiene una opción "Iniciar al arrancar" en su configuración que hace lo mismo.
+
 ## 9. Conclusiones
 
 - Un Pi-hole solo sirve dentro de la red donde vive, a menos que se combine con una VPN tipo Tailscale que "estire" esa red a cualquier lugar.
