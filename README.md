@@ -1,5 +1,7 @@
 # Secure DNS and Adblocking via Split-Tunnel VPN
 
+> **[Español] → La documentación completa, con instalación paso a paso y los errores que me encontré, está en [README.es.md](README.es.md).**
+
 This project documents the deployment of a network-wide DNS sinkhole (Pi-hole) securely accessible from any external network via a mesh VPN (Tailscale).
 
 ## Problem
